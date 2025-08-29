@@ -1,6 +1,5 @@
 use clap::Parser;
-use quick_xml::events::attributes::Attributes;
-use quick_xml::events::Event;
+use quick_xml::events::{BytesStart, Event};
 use quick_xml::reader::Reader;
 use quick_xml::writer::Writer;
 use std::fs::File;
@@ -31,32 +30,46 @@ fn main() {
     println!("Args: {:?}", args);
 
     let mut reader = args.input().unwrap();
-
+    let mut writer = Writer::new_with_indent(Cursor::new(Vec::new()), b' ', 2);
     let mut buf = Vec::new();
 
-    let mut writer = Writer::new(Cursor::new(Vec::new()));
-
     loop {
-        let item = reader.read_event_into(&mut buf);
-        match item {
+        let event = reader.read_event_into(&mut buf);
+        match event {
             Err(e) => panic!("Error at position {}: {:?}", reader.error_position(), e),
             Ok(Event::Eof) => break,
-            Ok(Event::Start(ref e)) => {
-                let inner = str::from_utf8(e);
-                println!("Start(e): {:?}", inner.unwrap());
-                for attr in e.attributes() {
-                    let attr = match attr {
-                        Ok(attr) => attr,
-                        Err(ref e) => {
-                            println!("Invalid attr {:?}: {:?}", &attr, e);
-                            continue;
-                        }
-                    };
-                    let key = str::from_utf8(attr.key.into_inner());
-                    let value = str::from_utf8(&attr.value);
-                    println!("  [{}]={:?}", key.unwrap(), value.unwrap());
+            Ok(Event::Start(e)) => {
+                let name = str::from_utf8(e.name().into_inner()).unwrap();
+                println!("Start(e): {:?}", name);
+
+                // Copy the tag.
+                let mut elem = BytesStart::new(name);
+                elem.extend_attributes(e.attributes().map(|attr| attr.unwrap()));
+
+                // Add an attribute.
+                elem.push_attribute(("my-key", "Start!"));
+
+                // Write the modified elem back into the document.
+                assert!(writer.write_event(Event::Start(elem)).is_ok())
+            }
+            Ok(Event::Empty(e)) => {
+                let name = str::from_utf8(e.name().into_inner()).unwrap();
+                println!("Empty(e): {:?}", name);
+
+                // Copy the tag.
+                let mut elem = BytesStart::new(name);
+                elem.extend_attributes(e.attributes().map(|attr| attr.unwrap()));
+
+                // Add an attribute.
+                elem.push_attribute(("my-key", "Empty!"));
+
+                // Write the modified elem back into the document.
+                assert!(writer.write_event(Event::Empty(elem)).is_ok())
+            }
+            Ok(Event::Text(e)) => {
+                if e.trim_ascii().len() != 0 {
+                    assert!(writer.write_event(Event::Text(e)).is_ok());
                 }
-                assert!(writer.write_event(item.unwrap()).is_ok())
             }
             Ok(e) => assert!(writer.write_event(e).is_ok()),
         }
@@ -68,34 +81,4 @@ fn main() {
         Ok(result) => println!("{}", result),
         Err(e) => panic!("Invalid UTF8 output: {}", e),
     }
-}
-
-fn process_attributes<'a>(
-    attrs: &mut Attributes,
-    buf: &'a mut String,
-) -> Result<Attributes<'a>, String> {
-    buf.clear();
-
-    for ref attr in attrs {
-        let attr = match attr {
-            Err(e) => return Err(format!("Invalid attr {:?}: {:?}", &attr.clone(), e)),
-            Ok(attr) => attr,
-        };
-
-        let key = match str::from_utf8(attr.key.into_inner()) {
-            Err(e) => return Err(e.to_string()),
-            Ok(key) => key,
-        };
-        let value = match str::from_utf8(&attr.value) {
-            Err(e) => return Err(e.to_string()),
-            Ok(value) => value,
-        };
-        println!("  [{}]={:?}", &key, &value);
-        buf.push(' ');
-        buf.push_str(&key);
-        buf.push('=');
-        buf.push_str(&value);
-    }
-
-    Ok(Attributes::new(buf.as_str(), 0))
 }
