@@ -27,7 +27,7 @@ impl Args {
 
 fn main() {
     let args = Args::parse();
-    println!("Args: {:?}", args);
+    eprintln!("Args: {:?}", args);
 
     let mut reader = args.input().unwrap();
     let mut writer = Writer::new_with_indent(Cursor::new(Vec::new()), b' ', 2);
@@ -40,7 +40,7 @@ fn main() {
             Ok(Event::Eof) => break,
             Ok(Event::Start(e)) => {
                 let name = str::from_utf8(e.name().into_inner()).unwrap();
-                println!("Start(e): {:?}", name);
+                eprintln!("Start(e): {:?}", name);
 
                 // Copy the tag.
                 let mut elem = BytesStart::new(name);
@@ -54,7 +54,7 @@ fn main() {
             }
             Ok(Event::Empty(e)) => {
                 let name = str::from_utf8(e.name().into_inner()).unwrap();
-                println!("Empty(e): {:?}", name);
+                eprintln!("Empty(e): {:?}", name);
 
                 // Copy the tag.
                 let mut elem = BytesStart::new(name);
