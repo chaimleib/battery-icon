@@ -108,7 +108,7 @@ fn process_attributes<'a>(tag_in: &'a BytesStart) -> Result<BytesStart<'a>, Stri
         return Ok(tag_out.with_attributes(attrs));
     }
 
-    match battery_fraction(&mut attr_map) {
+    match battery_fraction(&mut attr_map, 0.5) {
         Ok(_) => (),
         Err(e) => {
             return Err(format!(
@@ -125,9 +125,10 @@ fn process_attributes<'a>(tag_in: &'a BytesStart) -> Result<BytesStart<'a>, Stri
     Ok(tag_out)
 }
 
-// battery_fraction takes a HashMap of attributes for a <rect /> tag,
-// and scales its width from 100% to the percentage of the remaining charge.
-fn battery_fraction(attr_map: &mut HashMap<String, String>) -> Result<(), String> {
+// battery_fraction adjusts a HashMap of attributes for a <rect /> tag.
+// It scales its width from 100% to the percentage of the remaining charge.
+// It also changes its color if the remaining charge is too low.
+fn battery_fraction(attr_map: &mut HashMap<String, String>, charge: f64) -> Result<(), String> {
     // Check the width.
     let mut width: f64 = match attr_map.get("width") {
         Some(s) => match s.parse() {
@@ -139,10 +140,63 @@ fn battery_fraction(attr_map: &mut HashMap<String, String>) -> Result<(), String
         },
         None => return Err("#fraction had no [width]".to_string()),
     };
-    let battery_fraction = 0.33;
     eprintln!("old width = {:?}", width);
-    width *= battery_fraction;
+    width *= charge;
     attr_map.insert("width".to_string(), width.to_string());
     eprintln!("new width = {:?}", width);
+
+    // Change the color if low battery.
+    if charge < 0.3 {
+        let style = match attr_map.get("style") {
+            Some(s) => s,
+            None => "",
+        };
+        let mut style_map: HashMap<String, String> = match parse_style_map(style) {
+            Err(e) => {
+                eprintln!("in #fraction: {}", e);
+                HashMap::new()
+            }
+            Ok(m) => m,
+        };
+        let new_fill = if charge < 0.15 { "#ff0000" } else { "#ff8000" };
+        let fill = match style_map.get("fill") {
+            Some(s) => s,
+            None => "",
+        };
+        eprintln!("changing fraction fill {:?} -> {:?}", fill, new_fill);
+        style_map.insert("fill".to_string(), new_fill.to_string());
+        let new_style = map_as_style(&style_map);
+        attr_map.insert("style".to_string(), new_style);
+    }
     Ok(())
+}
+
+// parse_style_map converts an SVG style attribute into a key-value map.
+fn parse_style_map(style: &str) -> Result<HashMap<String, String>, String> {
+    let mut map = HashMap::new();
+    for kv in style.split(";") {
+        let kv: Vec<&str> = kv.trim().splitn(2, ":").collect();
+        if kv.len() != 2 {
+            return Err(format!("failed to parse style kv: {:?}", kv));
+        }
+        let key = kv[0];
+        let value = kv[1];
+        map.insert(key.to_string(), value.to_string());
+    }
+    Ok(map)
+}
+
+// map_as_style converts a key-value map into an SVG style attribute.
+fn map_as_style(map: &HashMap<String, String>) -> String {
+    let mut style = String::new();
+    for (k, v) in map {
+        style.push(';');
+        style.push_str(k);
+        style.push(':');
+        style.push_str(v);
+    }
+    if style.len() == 0 {
+        return "".to_string();
+    }
+    style.trim_start_matches(';').to_string()
 }
