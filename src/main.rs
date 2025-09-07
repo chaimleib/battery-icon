@@ -1,10 +1,12 @@
+use std::collections::HashMap;
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufReader, Cursor};
+
 use clap::Parser;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::reader::Reader;
 use quick_xml::writer::Writer;
-use std::collections::HashMap;
-use std::fs::File;
-use std::io::{BufReader, Cursor};
 
 /// Generates a battery icon with charging status.
 #[derive(Parser, Debug)]
@@ -17,9 +19,13 @@ struct Args {
 }
 
 impl Args {
-    fn input(&self) -> Result<Reader<BufReader<File>>, std::io::Error> {
-        let f = File::open(&self.svg)
-            .expect(format!("SVG file {:?} should be readable", &self.svg).as_str());
+    fn input(&self) -> Result<Reader<BufReader<File>>, Box<dyn Error>> {
+        let f = match File::open(&self.svg) {
+            Ok(f) => f,
+            Err(e) => {
+                return Err(format!("SVG file {:?} should be readable: {:?}", &self.svg, e).into())
+            }
+        };
         let input = BufReader::new(f);
         let reader = Reader::from_reader(input);
         Ok(reader)
@@ -78,11 +84,8 @@ fn main() {
     }
 }
 
-fn process_attributes<'a>(tag_in: &'a BytesStart) -> Result<BytesStart<'a>, String> {
-    let name = match str::from_utf8(tag_in.name().into_inner()) {
-        Ok(s) => s,
-        Err(e) => return Err(e.to_string()),
-    };
+fn process_attributes<'a>(tag_in: &'a BytesStart) -> Result<BytesStart<'a>, Box<dyn Error>> {
+    let name = str::from_utf8(tag_in.name().into_inner())?;
     let mut tag_out = BytesStart::new(name);
     let attrs = tag_in.attributes().map(|attr| attr.unwrap());
     if name != "rect" {
@@ -110,12 +113,7 @@ fn process_attributes<'a>(tag_in: &'a BytesStart) -> Result<BytesStart<'a>, Stri
 
     match battery_fraction(&mut attr_map, 0.5) {
         Ok(_) => (),
-        Err(e) => {
-            return Err(format!(
-                "failed to battery_fraction(rect#fraction): {:?}",
-                e
-            ))
-        }
+        Err(e) => return Err(format!("failed to battery_fraction(rect#fraction): {:?}", e).into()),
     }
 
     // Write the modified attributes into the result.
@@ -128,17 +126,20 @@ fn process_attributes<'a>(tag_in: &'a BytesStart) -> Result<BytesStart<'a>, Stri
 // battery_fraction adjusts a HashMap of attributes for a <rect /> tag.
 // It scales its width from 100% to the percentage of the remaining charge.
 // It also changes its color if the remaining charge is too low.
-fn battery_fraction(attr_map: &mut HashMap<String, String>, charge: f64) -> Result<(), String> {
+fn battery_fraction(
+    attr_map: &mut HashMap<String, String>,
+    charge: f64,
+) -> Result<(), Box<dyn Error>> {
     // Check the width.
     let mut width: f64 = match attr_map.get("width") {
         Some(s) => match s.parse() {
             Ok(f) => f,
             Err(e) => {
                 eprintln!("failed to parse #fraction[width]: {:?}", e);
-                return Err(e.to_string());
+                return Err(e.into());
             }
         },
-        None => return Err("#fraction had no [width]".to_string()),
+        None => return Err("#fraction had no [width]".into()),
     };
     eprintln!("old width = {:?}", width);
     width *= charge;
@@ -172,12 +173,12 @@ fn battery_fraction(attr_map: &mut HashMap<String, String>, charge: f64) -> Resu
 }
 
 // parse_style_map converts an SVG style attribute into a key-value map.
-fn parse_style_map(style: &str) -> Result<HashMap<String, String>, String> {
+fn parse_style_map(style: &str) -> Result<HashMap<String, String>, Box<dyn Error>> {
     let mut map = HashMap::new();
     for kv in style.split(";") {
         let kv: Vec<&str> = kv.trim().splitn(2, ":").collect();
         if kv.len() != 2 {
-            return Err(format!("failed to parse style kv: {:?}", kv));
+            return Err(format!("failed to parse style kv: {:?}", kv).into());
         }
         let key = kv[0];
         let value = kv[1];
