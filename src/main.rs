@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::error::Error;
 use std::fs::File;
-use std::io::{BufReader, Cursor};
+use std::io::{BufReader, BufWriter};
 
 use clap::Parser;
 use quick_xml::events::{BytesStart, Event};
@@ -30,6 +30,19 @@ impl Args {
         let reader = Reader::from_reader(input);
         Ok(reader)
     }
+
+    fn output(&self) -> Result<BufWriter<File>, Box<dyn Error>> {
+        let f = match File::create(&self.output) {
+            Ok(f) => f,
+            Err(e) => {
+                return Err(
+                    format!("output file {:?} should be writable: {:?}", &self.output, e).into(),
+                )
+            }
+        };
+        let output = BufWriter::new(f);
+        Ok(output)
+    }
 }
 
 fn main() {
@@ -37,7 +50,8 @@ fn main() {
     eprintln!("Args: {:?}", args);
 
     let mut reader = args.input().unwrap();
-    let mut writer = Writer::new_with_indent(Cursor::new(Vec::new()), b' ', 2);
+    let out_file = args.output().unwrap();
+    let mut writer = Writer::new(out_file);
     let mut buf = Vec::new();
 
     loop {
@@ -52,9 +66,6 @@ fn main() {
                 // Copy the tag.
                 let mut elem = BytesStart::new(name);
                 elem.extend_attributes(e.attributes().map(|attr| attr.unwrap()));
-
-                // Add an attribute.
-                elem.push_attribute(("my-key", "Start!"));
 
                 // Write the modified elem back into the document.
                 assert!(writer.write_event(Event::Start(elem)).is_ok())
@@ -75,12 +86,6 @@ fn main() {
             Ok(e) => assert!(writer.write_event(e).is_ok()),
         }
         buf.clear();
-    }
-
-    let result = writer.into_inner().into_inner();
-    match String::from_utf8(result) {
-        Ok(result) => println!("{}", result),
-        Err(e) => panic!("Invalid UTF8 output: {}", e),
     }
 }
 
