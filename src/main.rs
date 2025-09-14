@@ -59,29 +59,11 @@ fn main() {
         match event {
             Err(e) => panic!("Error at position {}: {:?}", reader.error_position(), e),
             Ok(Event::Eof) => break,
-            Ok(Event::Start(e)) => {
-                let name = str::from_utf8(e.name().into_inner()).unwrap();
-                eprintln!("Start(e): {:?}", name);
-
-                // Copy the tag.
-                let mut elem = BytesStart::new(name);
-                elem.extend_attributes(e.attributes().map(|attr| attr.unwrap()));
-
-                // Write the modified elem back into the document.
-                assert!(writer.write_event(Event::Start(elem)).is_ok())
-            }
             Ok(Event::Empty(e)) => {
-                let new_tag = match process_attributes(&e) {
-                    Err(e) => panic!("failed to process_attributes: {:?}", e),
-                    Ok(tag) => tag,
-                };
+                let new_tag = process_attributes(&e).expect("failed to process attributes");
+
                 // Write the modified elem back into the document.
                 assert!(writer.write_event(Event::Empty(new_tag)).is_ok())
-            }
-            Ok(Event::Text(e)) => {
-                if e.trim_ascii().len() != 0 {
-                    assert!(writer.write_event(Event::Text(e)).is_ok());
-                }
             }
             Ok(e) => assert!(writer.write_event(e).is_ok()),
         }
