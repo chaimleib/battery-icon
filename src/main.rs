@@ -4,6 +4,7 @@ use std::fs::File;
 use std::io::{BufReader, BufWriter};
 
 use clap::Parser;
+use quick_xml::events::attributes::Attribute;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::reader::Reader;
 use quick_xml::writer::Writer;
@@ -20,88 +21,91 @@ struct Args {
 
 impl Args {
     fn input(&self) -> Result<Reader<BufReader<File>>, Box<dyn Error>> {
-        let f = match File::open(&self.svg) {
-            Ok(f) => f,
-            Err(e) => {
-                return Err(format!("SVG file {:?} should be readable: {:?}", &self.svg, e).into())
-            }
-        };
+        let f = File::open(&self.svg)
+            .map_err(|e| format!("SVG file {:?} should be readable: {e}", &self.svg))?;
         let input = BufReader::new(f);
         let reader = Reader::from_reader(input);
         Ok(reader)
     }
 
     fn output(&self) -> Result<BufWriter<File>, Box<dyn Error>> {
-        let f = match File::create(&self.output) {
-            Ok(f) => f,
-            Err(e) => {
-                return Err(
-                    format!("output file {:?} should be writable: {:?}", &self.output, e).into(),
-                )
-            }
-        };
+        let f = File::create(&self.output)
+            .map_err(|e| format!("output file {:?} should be writable: {e}", &self.output))?;
         let output = BufWriter::new(f);
         Ok(output)
     }
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
     eprintln!("Args: {:?}", args);
 
-    let mut reader = args.input().unwrap();
-    let out_file = args.output().unwrap();
+    let mut reader = args.input()?;
+    let out_file = args.output()?;
     let mut writer = Writer::new(out_file);
     let mut buf = Vec::new();
 
     loop {
-        let event = reader.read_event_into(&mut buf);
+        let event = reader
+            .read_event_into(&mut buf)
+            .map_err(|e| format!("error at position {}: {e}", reader.error_position()))?;
         match event {
-            Err(e) => panic!("Error at position {}: {:?}", reader.error_position(), e),
-            Ok(Event::Eof) => break,
-            Ok(Event::Empty(e)) => {
-                let new_tag = process_attributes(&e).expect("failed to process attributes");
+            Event::Eof => break,
+
+            Event::Empty(e) => {
+                let new_tag = process_attributes(&e).map_err(|e| {
+                    format!("failed to process attributes of self-closing tag: {e}")
+                })?;
 
                 // Write the modified elem back into the document.
-                assert!(writer.write_event(Event::Empty(new_tag)).is_ok())
+                writer
+                    .write_event(Event::Empty(new_tag))
+                    .map_err(|e| format!("failed to write self-closing tag: {e}"))?;
             }
-            Ok(e) => assert!(writer.write_event(e).is_ok()),
+
+            e => writer
+                .write_event(e)
+                .map_err(|e| format!("failed to write other element: {e}"))?,
         }
         buf.clear();
     }
+    Ok(())
 }
 
 fn process_attributes<'a>(tag_in: &'a BytesStart) -> Result<BytesStart<'a>, Box<dyn Error>> {
     let name = str::from_utf8(tag_in.name().into_inner())?;
     let mut tag_out = BytesStart::new(name);
-    let attrs = tag_in.attributes().map(|attr| attr.unwrap());
+    let attrs: Vec<Attribute> = tag_in
+        .attributes()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("failed to collect attributes of {name}: {e}"))?;
     if name != "rect" {
         return Ok(tag_out.with_attributes(attrs));
     }
 
     let mut attr_map: HashMap<String, String> = HashMap::new();
     // Read the attributes out for modification.
-    for attr in attrs {
-        let key = str::from_utf8(attr.key.into_inner()).unwrap().to_string();
-        let value = str::from_utf8(&attr.value).unwrap().to_string();
+    for attr in &attrs {
+        let key = str::from_utf8(attr.key.into_inner())
+            .map_err(|e| format!("failed to decode {name} attr key as utf8: {e}"))?
+            .to_string();
+        let value = str::from_utf8(&attr.value)
+            .map_err(|e| format!("failed to decode {name}[{key}] value as utf8: {e}"))?
+            .to_string();
         attr_map.insert(key, value);
     }
-    // Refresh attrs for later use.
-    let attrs = tag_in.attributes().map(|attr| attr.unwrap());
-    // Check the id.
+    // Check the id. Return input unmodified if not present.
     let id = match attr_map.get("id") {
-        Some(val) => val,
+        Some(val) => val.to_string(),
         None => return Ok(tag_out.with_attributes(attrs)),
     };
     eprintln!("[id]={:?}", id);
-    if id != &"fraction" {
+    if id != "fraction" {
         return Ok(tag_out.with_attributes(attrs));
     }
 
-    match battery_fraction(&mut attr_map, 0.5) {
-        Ok(_) => (),
-        Err(e) => return Err(format!("failed to battery_fraction(rect#fraction): {:?}", e).into()),
-    }
+    battery_fraction(&mut attr_map, 0.5)
+        .map_err(|e| format!("failed to battery_fraction({name}#{id}): {e}"))?;
 
     // Write the modified attributes into the result.
     for (key, value) in attr_map {
@@ -118,16 +122,11 @@ fn battery_fraction(
     charge: f64,
 ) -> Result<(), Box<dyn Error>> {
     // Check the width.
-    let mut width: f64 = match attr_map.get("width") {
-        Some(s) => match s.parse() {
-            Ok(f) => f,
-            Err(e) => {
-                eprintln!("failed to parse #fraction[width]: {:?}", e);
-                return Err(e.into());
-            }
-        },
-        None => return Err("#fraction had no [width]".into()),
-    };
+    let mut width: f64 = attr_map
+        .get("width")
+        .ok_or_else(|| "#fraction had no [width]")?
+        .parse()
+        .map_err(|e| format!("failed to parse #fraction[width]: {e}"))?;
     eprintln!("old width = {:?}", width);
     width *= charge;
     attr_map.insert("width".to_string(), width.to_string());
@@ -135,24 +134,15 @@ fn battery_fraction(
 
     // Change the color if low battery.
     if charge < 0.3 {
-        let style = match attr_map.get("style") {
-            Some(s) => s,
-            None => "",
-        };
-        let mut style_map: HashMap<String, String> = match parse_style_map(style) {
-            Err(e) => {
-                eprintln!("in #fraction: {}", e);
-                HashMap::new()
-            }
-            Ok(m) => m,
-        };
+        let style = attr_map.get("style").map_or("", String::as_str);
+        let mut style_map: HashMap<String, String> =
+            parse_style_map(style).map_err(|e| format!("in #fraction: {e}"))?;
+
+        let fill = style_map.get("fill").map_or("", String::as_str);
         let new_fill = if charge < 0.15 { "#ff0000" } else { "#ff8000" };
-        let fill = match style_map.get("fill") {
-            Some(s) => s,
-            None => "",
-        };
-        eprintln!("changing fraction fill {:?} -> {:?}", fill, new_fill);
+        eprintln!("changing fraction fill {fill:?} -> {new_fill:?}");
         style_map.insert("fill".to_string(), new_fill.to_string());
+
         let new_style = map_as_style(&style_map);
         attr_map.insert("style".to_string(), new_style);
     }
@@ -165,7 +155,7 @@ fn parse_style_map(style: &str) -> Result<HashMap<String, String>, Box<dyn Error
     for kv in style.split(";") {
         let kv: Vec<&str> = kv.trim().splitn(2, ":").collect();
         if kv.len() != 2 {
-            return Err(format!("failed to parse style kv: {:?}", kv).into());
+            return Err(format!("failed to parse style kv: {kv:?}").into());
         }
         let key = kv[0];
         let value = kv[1];
