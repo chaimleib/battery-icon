@@ -9,6 +9,11 @@ use quick_xml::events::{BytesStart, Event};
 use quick_xml::reader::Reader;
 use quick_xml::writer::Writer;
 
+mod matcher;
+mod tag;
+
+use matcher::StackMatcher;
+
 /// Generates a battery icon with charging status.
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -35,135 +40,6 @@ impl Args {
         Ok(output)
     }
 }
-
-mod tag {
-    use std::error::Error;
-
-    use quick_xml::events::attributes::Attributes;
-    use quick_xml::events::{BytesEnd, BytesStart};
-    use quick_xml::name::QName;
-
-    #[derive(Clone)]
-    pub struct Tag {
-        pub name: String,
-        pub id: String,
-    }
-
-    impl Tag {
-        pub fn new(b: &dyn TagBytes) -> Result<Tag, Box<dyn Error>> {
-            let name = str::from_utf8(b.name().into_inner())?.to_string();
-            let id_attr = b.attributes().filter_map(|attr| attr.ok()).find(|attr| {
-                let key = str::from_utf8(attr.key.into_inner()).unwrap_or("");
-                key == "id"
-            });
-            let id = if let Some(attr) = id_attr {
-                str::from_utf8(&attr.value).unwrap_or("").to_string()
-            } else {
-                "".to_string()
-            };
-            let result = Tag { name, id };
-            Ok(result)
-        }
-    }
-
-    pub trait TagBytes {
-        fn name(&self) -> QName<'_>;
-        fn attributes(&self) -> Attributes<'_>;
-    }
-
-    impl TagBytes for BytesStart<'_> {
-        fn name(&self) -> QName<'_> {
-            self.name()
-        }
-
-        fn attributes(&self) -> Attributes<'_> {
-            self.attributes()
-        }
-    }
-
-    impl TagBytes for BytesEnd<'_> {
-        fn name(&self) -> QName<'_> {
-            self.name()
-        }
-
-        fn attributes(&self) -> Attributes<'_> {
-            Attributes::new("", 0)
-        }
-    }
-}
-
-mod matcher {
-    use crate::tag;
-    use std::error::Error;
-
-    pub trait StackMatcher {
-        fn matches(&self, stack: &Vec<tag::Tag>) -> bool;
-    }
-
-    pub struct IdMatcher {
-        pub id: String,
-    }
-
-    impl StackMatcher for IdMatcher {
-        fn matches(&self, stack: &Vec<tag::Tag>) -> bool {
-            let Some(last) = stack.last() else {
-                return false;
-            };
-            last.id == self.id
-        }
-    }
-
-    pub struct NameMatcher {
-        pub name: String,
-    }
-
-    impl StackMatcher for NameMatcher {
-        fn matches(&self, stack: &Vec<tag::Tag>) -> bool {
-            let Some(last) = stack.last() else {
-                return false;
-            };
-            last.name == self.name
-        }
-    }
-
-    pub struct AndMatcher {
-        pub matchers: Vec<Box<dyn StackMatcher>>,
-    }
-
-    impl StackMatcher for AndMatcher {
-        fn matches(&self, stack: &Vec<tag::Tag>) -> bool {
-            for m in &self.matchers {
-                if !m.matches(stack) {
-                    return false;
-                }
-            }
-            true
-        }
-    }
-
-    pub fn new_tag_matcher(spec: &str) -> Result<AndMatcher, Box<dyn Error>> {
-        let (name, id) = spec.split_once("#").unwrap_or((spec, ""));
-        let mut result = AndMatcher {
-            matchers: Vec::new(),
-        };
-        if name != "" {
-            result.matchers.push(Box::new(NameMatcher {
-                name: name.to_string(),
-            }));
-        }
-        if id != "" {
-            result
-                .matchers
-                .push(Box::new(IdMatcher { id: id.to_string() }));
-        }
-        if result.matchers.len() == 0 {
-            return Err("new_tag_matcher: failed to parse spec".into());
-        }
-        Ok(result)
-    }
-}
-
-use matcher::StackMatcher;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
