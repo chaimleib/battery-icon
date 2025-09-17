@@ -4,8 +4,9 @@ use std::fs::File;
 use std::io::{BufReader, BufWriter};
 
 use clap::Parser;
-use quick_xml::events::attributes::Attribute;
-use quick_xml::events::{BytesStart, Event};
+use quick_xml::events::attributes::{Attribute, Attributes};
+use quick_xml::events::{BytesEnd, BytesStart, Event};
+use quick_xml::name::QName;
 use quick_xml::reader::Reader;
 use quick_xml::writer::Writer;
 
@@ -36,6 +37,120 @@ impl Args {
     }
 }
 
+#[derive(Clone)]
+struct Tag {
+    name: String,
+    id: String,
+}
+
+trait TagBytes {
+    fn name(&self) -> QName<'_>;
+    fn attributes(&self) -> Attributes<'_>;
+}
+
+impl TagBytes for BytesStart<'_> {
+    fn name(&self) -> QName<'_> {
+        self.name()
+    }
+
+    fn attributes(&self) -> Attributes<'_> {
+        self.attributes()
+    }
+}
+
+impl TagBytes for BytesEnd<'_> {
+    fn name(&self) -> QName<'_> {
+        self.name()
+    }
+
+    fn attributes(&self) -> Attributes<'_> {
+        Attributes::new("", 0)
+    }
+}
+
+impl Tag {
+    fn new(b: &dyn TagBytes) -> Result<Tag, Box<dyn Error>> {
+        let name = str::from_utf8(b.name().into_inner())?.to_string();
+        let id_attr = b.attributes().filter_map(|attr| attr.ok()).find(|attr| {
+            let key = str::from_utf8(attr.key.into_inner()).unwrap_or("");
+            key == "id"
+        });
+        let id = if let Some(attr) = id_attr {
+            str::from_utf8(&attr.value).unwrap_or("").to_string()
+        } else {
+            "".to_string()
+        };
+        let result = Tag { name, id };
+        Ok(result)
+    }
+}
+
+trait StackMatcher {
+    fn matches(&self, stack: &Vec<Tag>) -> bool;
+}
+
+struct IdMatcher {
+    id: String,
+}
+
+impl StackMatcher for IdMatcher {
+    fn matches(&self, stack: &Vec<Tag>) -> bool {
+        let Some(last) = stack.last() else {
+            return false;
+        };
+        last.id == self.id
+    }
+}
+
+struct NameMatcher {
+    name: String,
+}
+
+impl StackMatcher for NameMatcher {
+    fn matches(&self, stack: &Vec<Tag>) -> bool {
+        let Some(last) = stack.last() else {
+            return false;
+        };
+        last.name == self.name
+    }
+}
+
+struct AndMatcher {
+    matchers: Vec<Box<dyn StackMatcher>>,
+}
+
+impl StackMatcher for AndMatcher {
+    fn matches(&self, stack: &Vec<Tag>) -> bool {
+        for m in &self.matchers {
+            if !m.matches(stack) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+fn new_tag_matcher(spec: &str) -> Result<AndMatcher, Box<dyn Error>> {
+    let (name, id) = spec.split_once("#").unwrap_or((spec, ""));
+    let mut result = AndMatcher {
+        matchers: Vec::new(),
+    };
+    if name != "" {
+        result.matchers.push(Box::new(NameMatcher {
+            name: name.to_string(),
+        }));
+    }
+    if id != "" {
+        result
+            .matchers
+            .push(Box::new(IdMatcher { id: id.to_string() }));
+    }
+    if result.matchers.len() == 0 {
+        return Err("new_tag_matcher: failed to parse spec".into());
+    }
+    Ok(result)
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
     eprintln!("Args: {:?}", args);
@@ -43,7 +158,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut reader = args.input()?;
     let out_file = args.output()?;
     let mut writer = Writer::new(out_file);
-    let mut buf = Vec::new();
+    let mut buf: Vec<u8> = Vec::new();
+    let mut tag_stack: Vec<Tag> = Vec::new();
 
     loop {
         let event = reader
@@ -63,6 +179,32 @@ fn main() -> Result<(), Box<dyn Error>> {
                     .map_err(|e| format!("failed to write self-closing tag: {e}"))?;
             }
 
+            Event::Start(e) => {
+                tag_stack.push(Tag::new(&e)?);
+                // eprintln!(">> {}", stack.join(">"));
+                writer
+                    .write_event(Event::Start(e))
+                    .map_err(|e| format!("failed to write start tag: {e}"))?;
+            }
+
+            Event::End(e) => {
+                // eprintln!("<< {}", stack.join(">"));
+                let tag = Tag::new(&e)?;
+                let Some(last_tag) = tag_stack.pop() else {
+                    return Err("unexpected close tag".into());
+                };
+                if tag.name != last_tag.name {
+                    return Err(format!(
+                        "unexpected {:?} close tag, current tag is {:?}",
+                        tag.name, last_tag.name,
+                    )
+                    .into());
+                }
+                writer
+                    .write_event(Event::End(e))
+                    .map_err(|e| format!("failed to write end tag: {e}"))?;
+            }
+
             e => writer
                 .write_event(e)
                 .map_err(|e| format!("failed to write other element: {e}"))?,
@@ -72,40 +214,26 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn process_attributes<'a>(tag_in: &'a BytesStart) -> Result<BytesStart<'a>, Box<dyn Error>> {
-    let name = str::from_utf8(tag_in.name().into_inner())?;
-    let mut tag_out = BytesStart::new(name);
+fn process_attributes<'a>(tag_in: &'a dyn TagBytes) -> Result<BytesStart<'a>, Box<dyn Error>> {
+    let tag = Tag::new(tag_in)?;
+    let mut tag_out = BytesStart::new(tag.name.clone());
     let attrs: Vec<Attribute> = tag_in
         .attributes()
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("failed to collect attributes of {name}: {e}"))?;
-    if name != "rect" {
-        return Ok(tag_out.with_attributes(attrs));
-    }
+        .map_err(|e| format!("failed to collect attributes of {}: {e}", tag.name))?;
 
-    let mut attr_map: HashMap<String, String> = HashMap::new();
-    // Read the attributes out for modification.
-    for attr in &attrs {
-        let key = str::from_utf8(attr.key.into_inner())
-            .map_err(|e| format!("failed to decode {name} attr key as utf8: {e}"))?
-            .to_string();
-        let value = str::from_utf8(&attr.value)
-            .map_err(|e| format!("failed to decode {name}[{key}] value as utf8: {e}"))?
-            .to_string();
-        attr_map.insert(key, value);
-    }
-    // Check the id. Return input unmodified if not present.
-    let id = match attr_map.get("id") {
-        Some(val) => val.to_string(),
-        None => return Ok(tag_out.with_attributes(attrs)),
-    };
-    eprintln!("[id]={:?}", id);
-    if id != "fraction" {
+    let fraction_spec = "rect#fraction";
+    if !new_tag_matcher(fraction_spec)?.matches(&vec![tag.clone()]) {
         return Ok(tag_out.with_attributes(attrs));
     }
+    eprintln!("[id]={:?}", tag.id);
+
+    let Ok(mut attr_map) = new_attr_map(&attrs) else {
+        return Ok(tag_out.with_attributes(attrs));
+    };
 
     battery_fraction(&mut attr_map, 0.5)
-        .map_err(|e| format!("failed to battery_fraction({name}#{id}): {e}"))?;
+        .map_err(|e| format!("failed to battery_fraction({fraction_spec}): {e}"))?;
 
     // Write the modified attributes into the result.
     for (key, value) in attr_map {
@@ -147,6 +275,17 @@ fn battery_fraction(
         attr_map.insert("style".to_string(), new_style);
     }
     Ok(())
+}
+
+fn new_attr_map(attrs: &Vec<Attribute>) -> Result<HashMap<String, String>, Box<dyn Error>> {
+    let mut attr_map: HashMap<String, String> = HashMap::new();
+    // Read the attributes out for modification.
+    for attr in attrs {
+        let key = str::from_utf8(attr.key.into_inner())?.to_string();
+        let value = str::from_utf8(&attr.value)?.to_string();
+        attr_map.insert(key, value);
+    }
+    Ok(attr_map)
 }
 
 // parse_style_map converts an SVG style attribute into a key-value map.
