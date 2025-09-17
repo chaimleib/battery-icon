@@ -4,9 +4,8 @@ use std::fs::File;
 use std::io::{BufReader, BufWriter};
 
 use clap::Parser;
-use quick_xml::events::attributes::{Attribute, Attributes};
-use quick_xml::events::{BytesEnd, BytesStart, Event};
-use quick_xml::name::QName;
+use quick_xml::events::attributes::Attribute;
+use quick_xml::events::{BytesStart, Event};
 use quick_xml::reader::Reader;
 use quick_xml::writer::Writer;
 
@@ -37,119 +36,134 @@ impl Args {
     }
 }
 
-#[derive(Clone)]
-struct Tag {
-    name: String,
-    id: String,
-}
+mod tag {
+    use std::error::Error;
 
-trait TagBytes {
-    fn name(&self) -> QName<'_>;
-    fn attributes(&self) -> Attributes<'_>;
-}
+    use quick_xml::events::attributes::Attributes;
+    use quick_xml::events::{BytesEnd, BytesStart};
+    use quick_xml::name::QName;
 
-impl TagBytes for BytesStart<'_> {
-    fn name(&self) -> QName<'_> {
-        self.name()
+    #[derive(Clone)]
+    pub struct Tag {
+        pub name: String,
+        pub id: String,
     }
 
-    fn attributes(&self) -> Attributes<'_> {
-        self.attributes()
+    impl Tag {
+        pub fn new(b: &dyn TagBytes) -> Result<Tag, Box<dyn Error>> {
+            let name = str::from_utf8(b.name().into_inner())?.to_string();
+            let id_attr = b.attributes().filter_map(|attr| attr.ok()).find(|attr| {
+                let key = str::from_utf8(attr.key.into_inner()).unwrap_or("");
+                key == "id"
+            });
+            let id = if let Some(attr) = id_attr {
+                str::from_utf8(&attr.value).unwrap_or("").to_string()
+            } else {
+                "".to_string()
+            };
+            let result = Tag { name, id };
+            Ok(result)
+        }
+    }
+
+    pub trait TagBytes {
+        fn name(&self) -> QName<'_>;
+        fn attributes(&self) -> Attributes<'_>;
+    }
+
+    impl TagBytes for BytesStart<'_> {
+        fn name(&self) -> QName<'_> {
+            self.name()
+        }
+
+        fn attributes(&self) -> Attributes<'_> {
+            self.attributes()
+        }
+    }
+
+    impl TagBytes for BytesEnd<'_> {
+        fn name(&self) -> QName<'_> {
+            self.name()
+        }
+
+        fn attributes(&self) -> Attributes<'_> {
+            Attributes::new("", 0)
+        }
     }
 }
 
-impl TagBytes for BytesEnd<'_> {
-    fn name(&self) -> QName<'_> {
-        self.name()
+mod matcher {
+    use crate::tag;
+    use std::error::Error;
+
+    pub trait StackMatcher {
+        fn matches(&self, stack: &Vec<tag::Tag>) -> bool;
     }
 
-    fn attributes(&self) -> Attributes<'_> {
-        Attributes::new("", 0)
+    pub struct IdMatcher {
+        pub id: String,
     }
-}
 
-impl Tag {
-    fn new(b: &dyn TagBytes) -> Result<Tag, Box<dyn Error>> {
-        let name = str::from_utf8(b.name().into_inner())?.to_string();
-        let id_attr = b.attributes().filter_map(|attr| attr.ok()).find(|attr| {
-            let key = str::from_utf8(attr.key.into_inner()).unwrap_or("");
-            key == "id"
-        });
-        let id = if let Some(attr) = id_attr {
-            str::from_utf8(&attr.value).unwrap_or("").to_string()
-        } else {
-            "".to_string()
+    impl StackMatcher for IdMatcher {
+        fn matches(&self, stack: &Vec<tag::Tag>) -> bool {
+            let Some(last) = stack.last() else {
+                return false;
+            };
+            last.id == self.id
+        }
+    }
+
+    pub struct NameMatcher {
+        pub name: String,
+    }
+
+    impl StackMatcher for NameMatcher {
+        fn matches(&self, stack: &Vec<tag::Tag>) -> bool {
+            let Some(last) = stack.last() else {
+                return false;
+            };
+            last.name == self.name
+        }
+    }
+
+    pub struct AndMatcher {
+        pub matchers: Vec<Box<dyn StackMatcher>>,
+    }
+
+    impl StackMatcher for AndMatcher {
+        fn matches(&self, stack: &Vec<tag::Tag>) -> bool {
+            for m in &self.matchers {
+                if !m.matches(stack) {
+                    return false;
+                }
+            }
+            true
+        }
+    }
+
+    pub fn new_tag_matcher(spec: &str) -> Result<AndMatcher, Box<dyn Error>> {
+        let (name, id) = spec.split_once("#").unwrap_or((spec, ""));
+        let mut result = AndMatcher {
+            matchers: Vec::new(),
         };
-        let result = Tag { name, id };
+        if name != "" {
+            result.matchers.push(Box::new(NameMatcher {
+                name: name.to_string(),
+            }));
+        }
+        if id != "" {
+            result
+                .matchers
+                .push(Box::new(IdMatcher { id: id.to_string() }));
+        }
+        if result.matchers.len() == 0 {
+            return Err("new_tag_matcher: failed to parse spec".into());
+        }
         Ok(result)
     }
 }
 
-trait StackMatcher {
-    fn matches(&self, stack: &Vec<Tag>) -> bool;
-}
-
-struct IdMatcher {
-    id: String,
-}
-
-impl StackMatcher for IdMatcher {
-    fn matches(&self, stack: &Vec<Tag>) -> bool {
-        let Some(last) = stack.last() else {
-            return false;
-        };
-        last.id == self.id
-    }
-}
-
-struct NameMatcher {
-    name: String,
-}
-
-impl StackMatcher for NameMatcher {
-    fn matches(&self, stack: &Vec<Tag>) -> bool {
-        let Some(last) = stack.last() else {
-            return false;
-        };
-        last.name == self.name
-    }
-}
-
-struct AndMatcher {
-    matchers: Vec<Box<dyn StackMatcher>>,
-}
-
-impl StackMatcher for AndMatcher {
-    fn matches(&self, stack: &Vec<Tag>) -> bool {
-        for m in &self.matchers {
-            if !m.matches(stack) {
-                return false;
-            }
-        }
-        true
-    }
-}
-
-fn new_tag_matcher(spec: &str) -> Result<AndMatcher, Box<dyn Error>> {
-    let (name, id) = spec.split_once("#").unwrap_or((spec, ""));
-    let mut result = AndMatcher {
-        matchers: Vec::new(),
-    };
-    if name != "" {
-        result.matchers.push(Box::new(NameMatcher {
-            name: name.to_string(),
-        }));
-    }
-    if id != "" {
-        result
-            .matchers
-            .push(Box::new(IdMatcher { id: id.to_string() }));
-    }
-    if result.matchers.len() == 0 {
-        return Err("new_tag_matcher: failed to parse spec".into());
-    }
-    Ok(result)
-}
+use matcher::StackMatcher;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
@@ -159,7 +173,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let out_file = args.output()?;
     let mut writer = Writer::new(out_file);
     let mut buf: Vec<u8> = Vec::new();
-    let mut tag_stack: Vec<Tag> = Vec::new();
+    let mut tag_stack: Vec<tag::Tag> = Vec::new();
 
     loop {
         let event = reader
@@ -180,7 +194,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
 
             Event::Start(e) => {
-                tag_stack.push(Tag::new(&e)?);
+                tag_stack.push(tag::Tag::new(&e)?);
                 // eprintln!(">> {}", stack.join(">"));
                 writer
                     .write_event(Event::Start(e))
@@ -189,7 +203,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
             Event::End(e) => {
                 // eprintln!("<< {}", stack.join(">"));
-                let tag = Tag::new(&e)?;
+                let tag = tag::Tag::new(&e)?;
                 let Some(last_tag) = tag_stack.pop() else {
                     return Err("unexpected close tag".into());
                 };
@@ -214,8 +228,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn process_attributes<'a>(tag_in: &'a dyn TagBytes) -> Result<BytesStart<'a>, Box<dyn Error>> {
-    let tag = Tag::new(tag_in)?;
+fn process_attributes<'a>(tag_in: &'a dyn tag::TagBytes) -> Result<BytesStart<'a>, Box<dyn Error>> {
+    let tag = tag::Tag::new(tag_in)?;
     let mut tag_out = BytesStart::new(tag.name.clone());
     let attrs: Vec<Attribute> = tag_in
         .attributes()
@@ -223,7 +237,7 @@ fn process_attributes<'a>(tag_in: &'a dyn TagBytes) -> Result<BytesStart<'a>, Bo
         .map_err(|e| format!("failed to collect attributes of {}: {e}", tag.name))?;
 
     let fraction_spec = "rect#fraction";
-    if !new_tag_matcher(fraction_spec)?.matches(&vec![tag.clone()]) {
+    if !matcher::new_tag_matcher(fraction_spec)?.matches(&vec![tag.clone()]) {
         return Ok(tag_out.with_attributes(attrs));
     }
     eprintln!("[id]={:?}", tag.id);
