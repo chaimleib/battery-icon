@@ -59,7 +59,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             Event::Eof => break,
 
             Event::Empty(e) => {
-                let new_tag = process_attributes(&e).map_err(|e| {
+                // For the sake of the matcher, push the current tag onto the stack.
+                tag_stack.push(tag::Tag::new(&e)?);
+
+                // If any rule matches, modify the attributes and return the resulting tag.
+                let new_tag = process_attributes(&tag_stack, &e).map_err(|e| {
                     format!("failed to process attributes of self-closing tag: {e}")
                 })?;
 
@@ -67,22 +71,37 @@ fn main() -> Result<(), Box<dyn Error>> {
                 writer
                     .write_event(Event::Empty(new_tag))
                     .map_err(|e| format!("failed to write self-closing tag: {e}"))?;
+
+                // Pop the current tag again, since Empty tags have no children.
+                tag_stack
+                    .pop()
+                    .ok_or_else(|| format!("unexpected error while popping a self-closing tag"))?;
             }
 
             Event::Start(e) => {
+                // Push a tag onto the stack, which might have children.
                 tag_stack.push(tag::Tag::new(&e)?);
                 // eprintln!(">> {}", stack.join(">"));
+
+                // If any rule matches, modify the attributes and return the resulting tag.
+                let new_tag = process_attributes(&tag_stack, &e)
+                    .map_err(|e| format!("failed to process attributes of Start tag: {e}"))?;
+
+                // Write the modified elem back into the document.
                 writer
-                    .write_event(Event::Start(e))
+                    .write_event(Event::Start(new_tag))
                     .map_err(|e| format!("failed to write start tag: {e}"))?;
             }
 
             Event::End(e) => {
                 // eprintln!("<< {}", stack.join(">"));
-                let tag = tag::Tag::new(&e)?;
+
+                // Pop the tag off of the stack,
+                // and verify that it matches the start tag.
                 let Some(last_tag) = tag_stack.pop() else {
                     return Err("unexpected close tag".into());
                 };
+                let tag = tag::Tag::new(&e)?;
                 if tag.name != last_tag.name {
                     return Err(format!(
                         "unexpected {:?} close tag, current tag is {:?}",
@@ -104,26 +123,25 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn process_attributes<'a>(tag_in: &'a dyn tag::TagBytes) -> Result<BytesStart<'a>, Box<dyn Error>> {
+fn process_attributes<'a>(
+    tag_stack: &Vec<tag::Tag>,
+    tag_in: &'a dyn tag::TagBytes,
+) -> Result<BytesStart<'a>, Box<dyn Error>> {
     let tag = tag::Tag::new(tag_in)?;
     let mut tag_out = BytesStart::new(tag.name.clone());
+
+    // Build the attr_map so that we can read and modify the attributes.
     let attrs: Vec<Attribute> = tag_in
         .attributes()
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("failed to collect attributes of {}: {e}", tag.name))?;
-
-    let fraction_spec = "rect#fraction";
-    if !matcher::new_tag_matcher(fraction_spec)?.matches(&vec![tag.clone()]) {
-        return Ok(tag_out.with_attributes(attrs));
-    }
-    eprintln!("[id]={:?}", tag.id);
-
     let Ok(mut attr_map) = new_attr_map(&attrs) else {
         return Ok(tag_out.with_attributes(attrs));
     };
 
-    battery_fraction(&mut attr_map, 0.5)
-        .map_err(|e| format!("failed to battery_fraction({fraction_spec}): {e}"))?;
+    // Set the bar graph width and color.
+    battery_fraction(tag_stack, &mut attr_map, 0.5)
+        .map_err(|e| format!("battery_fraction failed: {e}"))?;
 
     // Write the modified attributes into the result.
     for (key, value) in attr_map {
@@ -136,9 +154,17 @@ fn process_attributes<'a>(tag_in: &'a dyn tag::TagBytes) -> Result<BytesStart<'a
 // It scales its width from 100% to the percentage of the remaining charge.
 // It also changes its color if the remaining charge is too low.
 fn battery_fraction(
+    tag_stack: &Vec<tag::Tag>,
     attr_map: &mut HashMap<String, String>,
     charge: f64,
 ) -> Result<(), Box<dyn Error>> {
+    let fraction_spec = "rect#fraction";
+    if !matcher::new_tag_matcher(fraction_spec)?.matches(tag_stack) {
+        // eprintln!("no match at {tag_stack:?}");
+        return Ok(());
+    }
+    eprintln!("battery_fraction match at {tag_stack:?}");
+
     // Check the width.
     let mut width: f64 = attr_map
         .get("width")

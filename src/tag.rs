@@ -4,7 +4,7 @@ use quick_xml::events::attributes::Attributes;
 use quick_xml::events::{BytesEnd, BytesStart};
 use quick_xml::name::QName;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Tag {
     pub name: String,
     pub id: String,
