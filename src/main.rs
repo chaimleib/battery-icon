@@ -22,6 +22,15 @@ struct Args {
     svg: std::path::PathBuf,
     /// Path to the result image.
     output: std::path::PathBuf,
+
+    #[arg(short, long, default_value_t = 1.0)]
+    level: f64,
+
+    #[arg(short, long, default_value_t = false)]
+    charging: bool,
+
+    #[arg(short, long, default_value_t = String::from("000000"))]
+    foreground: String,
 }
 
 impl Args {
@@ -43,7 +52,7 @@ impl Args {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
-    eprintln!("Args: {:?}", args);
+    // eprintln!("Args: {:?}", args);
 
     let mut reader = args.input()?;
     let out_file = args.output()?;
@@ -63,7 +72,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 tag_stack.push(tag::Tag::new(&e)?);
 
                 // If any rule matches, modify the attributes and return the resulting tag.
-                let new_tag = process_attributes(&tag_stack, &e).map_err(|e| {
+                let new_tag = process_attributes(&tag_stack, &e, &args).map_err(|e| {
                     format!("failed to process attributes of self-closing tag: {e}")
                 })?;
 
@@ -84,7 +93,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 // eprintln!(">> {}", stack.join(">"));
 
                 // If any rule matches, modify the attributes and return the resulting tag.
-                let new_tag = process_attributes(&tag_stack, &e)
+                let new_tag = process_attributes(&tag_stack, &e, &args)
                     .map_err(|e| format!("failed to process attributes of Start tag: {e}"))?;
 
                 // Write the modified elem back into the document.
@@ -126,6 +135,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 fn process_attributes<'a>(
     tag_stack: &Vec<tag::Tag>,
     tag_in: &'a dyn tag::TagBytes,
+    args: &Args,
 ) -> Result<BytesStart<'a>, Box<dyn Error>> {
     let tag = tag::Tag::new(tag_in)?;
     let mut tag_out = BytesStart::new(tag.name.clone());
@@ -139,15 +149,45 @@ fn process_attributes<'a>(
         return Ok(tag_out.with_attributes(attrs));
     };
 
+    // Set the color of the text elements.
+    text_color(tag_stack, &mut attr_map, &args.foreground)
+        .map_err(|e| format!("text_color failed: {e}"))?;
+
     // Set the bar graph width and color.
-    battery_fraction(tag_stack, &mut attr_map, 0.5)
+    battery_fraction(tag_stack, &mut attr_map, args.level)
         .map_err(|e| format!("battery_fraction failed: {e}"))?;
+
+    // Turn off the charging icon if not charging.
+    charging_icon(tag_stack, &mut attr_map, args.charging)
+        .map_err(|e| format!("charging_icon failed: {e}"))?;
 
     // Write the modified attributes into the result.
     for (key, value) in attr_map {
         tag_out.push_attribute((key.as_str(), value.as_str()));
     }
     Ok(tag_out)
+}
+
+fn text_color(
+    tag_stack: &Vec<tag::Tag>,
+    attr_map: &mut HashMap<String, String>,
+    foreground: &str,
+) -> Result<(), Box<dyn Error>> {
+    let spec = "tspan";
+    if !matcher::new_tag_matcher(spec)?.matches(tag_stack) {
+        // eprintln!("no match at {tag_stack:?}");
+        return Ok(());
+    }
+
+    let style = attr_map.get("style").map_or("", String::as_str);
+    let mut style_map: HashMap<String, String> =
+        parse_style_map(style).map_err(|e| format!("in {spec}: {e}"))?;
+
+    style_map.insert("fill".to_string(), format!("#{foreground}"));
+
+    let new_style = map_as_style(&style_map);
+    attr_map.insert("style".to_string(), new_style);
+    Ok(())
 }
 
 // battery_fraction adjusts a HashMap of attributes for a <rect /> tag.
@@ -163,7 +203,7 @@ fn battery_fraction(
         // eprintln!("no match at {tag_stack:?}");
         return Ok(());
     }
-    eprintln!("battery_fraction match at {tag_stack:?}");
+    // eprintln!("battery_fraction match at {tag_stack:?}");
 
     // Check the width.
     let mut width: f64 = attr_map
@@ -171,10 +211,10 @@ fn battery_fraction(
         .ok_or_else(|| "#fraction had no [width]")?
         .parse()
         .map_err(|e| format!("failed to parse #fraction[width]: {e}"))?;
-    eprintln!("old width = {:?}", width);
+    // eprintln!("old width = {:?}", width);
     width *= charge;
     attr_map.insert("width".to_string(), width.to_string());
-    eprintln!("new width = {:?}", width);
+    // eprintln!("new width = {:?}", width);
 
     // Change the color if low battery.
     if charge < 0.3 {
@@ -182,14 +222,38 @@ fn battery_fraction(
         let mut style_map: HashMap<String, String> =
             parse_style_map(style).map_err(|e| format!("in #fraction: {e}"))?;
 
-        let fill = style_map.get("fill").map_or("", String::as_str);
+        // let fill = style_map.get("fill").map_or("", String::as_str);
         let new_fill = if charge < 0.15 { "#ff0000" } else { "#ff8000" };
-        eprintln!("changing fraction fill {fill:?} -> {new_fill:?}");
+        // eprintln!("changing fraction fill {fill:?} -> {new_fill:?}");
         style_map.insert("fill".to_string(), new_fill.to_string());
 
         let new_style = map_as_style(&style_map);
         attr_map.insert("style".to_string(), new_style);
     }
+    Ok(())
+}
+
+// charging_icon turns the lightning bolt icon on and off,
+// depending on whether we are charging the battery.
+fn charging_icon(
+    tag_stack: &Vec<tag::Tag>,
+    attr_map: &mut HashMap<String, String>,
+    charging: bool,
+) -> Result<(), Box<dyn Error>> {
+    if charging {
+        return Ok(());
+    }
+
+    let spec = "text#icon";
+    if !matcher::new_tag_matcher(spec)?.matches(tag_stack) {
+        return Ok(());
+    }
+    let style = attr_map.get("style").map_or("", String::as_str);
+    let mut style_map: HashMap<String, String> =
+        parse_style_map(style).map_err(|e| format!("in #icon: {e}"))?;
+    style_map.insert("display".to_string(), "none".to_string());
+    let new_style = map_as_style(&style_map);
+    attr_map.insert("style".to_string(), new_style);
     Ok(())
 }
 
