@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg sodipodi:docname="base-src.svg" inkscape:export-filename="battery.svg" xmlns="http://www.w3.org/2000/svg" xmlns:svg="http://www.w3.org/2000/svg" xmlns:cc="http://creativecommons.org/ns#" width="52.916622mm" version="1.1" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd" inkscape:export-ydpi="96" inkscape:export-xdpi="96" viewBox="0 0 52.916622 29.398125" inkscape:version="1.4.2 (ebf0e940d0, 2025-05-08)" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:dc="http://purl.org/dc/elements/1.1/" height="29.398125mm" id="svg1">
+  <defs id="defs1"/>
+  <sodipodi:namedview inkscape:window-height="779" inkscape:cy="106.66875" inkscape:pagecheckerboard="0" pagecolor="#000000" inkscape:document-units="mm" inkscape:deskcolor="#ffffff" inkscape:pageshadow="2" inkscape:pageopacity="0.0" id="base" inkscape:window-x="0" inkscape:window-y="0" inkscape:current-layer="svg1" inkscape:clip-to-page="true" inkscape:showpageshadow="2" borderopacity="0.41176471" inkscape:cx="252.15682" inkscape:zoom="1.4812211" inkscape:window-maximized="1" bordercolor="#ffffff" inkscape:window-width="1274" inkscape:export-bgcolor="#00000000"/>
+  <metadata id="metadata1">
+    <rdf:RDF>
+      <cc:Work rdf:about="">
+        <dc:format>image/svg+xml</dc:format>
+        <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
+      </cc:Work>
+    </rdf:RDF>
+  </metadata>
+  <rect inkscape:label="fraction" height="18" y="5.75" style="fill:#00d400;stroke-width:5.04885" width="38.25" id="fraction" x="5.875001"/>
+  <text x="26.458311" xml:space="preserve" y="32.337936" style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:47.037px;line-height:1;font-family:&apos;Font Awesome 6 Brands&apos;;-inkscape-font-specification:&apos;Font Awesome 6 Brands&apos;;text-align:center;letter-spacing:0.48507px;word-spacing:6.68811px;writing-mode:lr-tb;direction:ltr;text-anchor:middle;fill:#ffffff;stroke-width:16.169" inkscape:label="outline" id="outline"><tspan sodipodi:role="line" x="26.700846" id="tspan1" style="font-family:&apos;Font Awesome 6 Free&apos;;font-style:normal;font-variant:normal;-inkscape-font-specification:&apos;Font Awesome 6 Free&apos;;font-stretch:normal;font-weight:normal;fill:#000000;stroke-width:16.169" y="32.337936"></tspan></text>
+  <text inkscape:export-xdpi="96" inkscape:label="icon" y="23.315819" inkscape:export-filename="battery.svg" id="icon" inkscape:export-ydpi="96" xml:space="preserve" style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:23.5186px;line-height:1;font-family:&apos;Font Awesome 6 Free&apos;;-inkscape-font-specification:&apos;Font Awesome 6 Free&apos;;text-align:center;letter-spacing:0.48507px;word-spacing:6.68811px;writing-mode:lr-tb;direction:ltr;text-anchor:middle;fill:#ffffff;stroke-width:16.169" x="25.706482"><tspan sodipodi:role="line" id="tspan3" x="25.949017" y="23.315819" style="stroke-width:16.169;fill:#000000"></tspan></text>
+</svg>
